@@ -1,4 +1,4 @@
-# build.yml Build pipeline to build JDK docker images. When running the pipeline
+# build.yml Build pipeline to build Microsoft's build of OpenJDK docker images. When running the pipeline
 # replace "image-repository" value with the location of your docker images (e.g. hub.docker.io/...)
 # replace the image tags as needed.
 
@@ -13,154 +13,241 @@ trigger:
     exclude:
       - .devops
       - .github/workflows
+
 pr: none
 
 parameters:
+  - name: organization
+    type: string
+  - name: feed
+    type: string
+  - name: az_package
+    type: string
+    displayName: "Oras package name"
+  - name: dryrun
+    displayName: "Execute a dry run?"
+    type: boolean
+    default: false
   - name: jobs
     type: object
     default:
-      mariner_8:
-        distro: mariner
+      azurelinux_8:
+        hasExistingImages: true
+        distro: azurelinux
         version: 8
         package: temurin-8
         image: "image-repository"
-        tag: "image-tag"
-      distroless_8:
-        distro: distroless
-        version: 8
-        package: temurin-8
-        installer_image: "image-repository"
-        installer_tag: "2.0"
-        base_image: "image-repository"
-        base_tag: "2.0"
-      ubuntu_11:
-        distro: ubuntu
-        version: 11
-        package: msopenjdk-11
-        image: "image-repository"
-        tag: "image-tag"
-      mariner_cm1_11:
-        distro: mariner-cm1
-        version: 11
-        package: msopenjdk-11
-        image: "image-repository"
-        tag: "1.0"
+        tag: "3.0"
       distroless_11:
+        hasExistingImages: true
         distro: distroless
         version: 11
         package: msopenjdk-11
         installer_image: "image-repository"
-        installer_tag: "2.0"
+        installer_tag: "3.0"
         base_image: "image-repository"
-        base_tag: "2.0"
+        base_tag: "3.0"
       ubuntu_17:
+        hasExistingImages: true
         distro: ubuntu
         version: 17
         package: msopenjdk-17
         image: "image-repository"
         tag: "image-tag"
-      mariner_cm1_17:
-        distro: mariner-cm1
-        version: 17
-        package: msopenjdk-17
+      azurelinux_21:
+        hasExistingImages: true
+        distro: azurelinux
+        version: 21
+        package: msopenjdk-21
         image: "image-repository"
-        tag: "1.0"
-      distroless_17:
-        distro: distroless
-        version: 17
-        package: msopenjdk-17
-        installer_image: "image-repository"
-        installer_tag: "2.0"
-        base_image: "image-repository"
-        base_tag: "2.0"
+        tag: "3.0"
 
-jobs:
-  - job: build_internal
-    displayName: "build internal "
-    pool:
-      vmImage: ubuntu-20.04
-    strategy:
-      matrix: ${{ parameters.jobs }}
-    steps:
-      - task: Docker@2
-        displayName: build image
-        condition: and(succeeded(), ne(variables.distro, 'distroless'))
-        inputs:
-          command: build
-          repository: internal/private/openjdk/jdk
-          dockerfile: docker/$(distro)/Dockerfile.$(package)-jdk
-          containerRegistry: "Java Engineering ACR"
-          arguments: --build-arg IMAGE=$(image) --build-arg TAG=$(tag) --build-arg package=$(package)
-          tags: |
-            $(version)-$(distro)
-      - task: Docker@2
-        displayName: build image
-        condition: and(succeeded(), eq(variables.distro, 'distroless'))
-        inputs:
-          command: build
-          repository: internal/private/openjdk/jdk
-          dockerfile: docker/$(distro)/Dockerfile.$(package)-jdk
-          containerRegistry: "Java Engineering ACR"
-          arguments: --build-arg INSTALLER_IMAGE=$(installer_image) --build-arg INSTALLER_TAG=$(installer_tag) --build-arg BASE_IMAGE=$(base_image) --build-arg BASE_TAG=$(base_tag) --build-arg package=$(package)
-          tags: |
-            $(version)-$(distro)
-      - task: Docker@2
-        displayName: push image to container registry
-        inputs:
-          command: push
-          repository: internal/private/openjdk/jdk
-          containerRegistry: "Java Engineering ACR"
-          tags: |
-            $(version)-$(distro)
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: JEG-windows2022-x64-release
+        os: windows
+    stages:
+      - stage: build_internal
+        displayName: Build Internal
+        variables:
+          ACR_NAME: msopenjdk
+        jobs:
+          - job: build_internal
+            pool:
+              name: JEG-azurelinux-x64-release
+              os: linux
+            strategy:
+              matrix: ${{ parameters.jobs }}
+            steps:
+              - template: /.devops/templates/prepare-annotation.yml@self
+                parameters:
+                  registry: $(INTERNAL_ACR_REGISTRY)
+                  tag: $(version)-$(distro)
+
+              - bash: |
+                  REGISTRIES=$(INTERNAL_ACR_REGISTRY):$(version)-$(distro)
+                  if [[ "$(distro)" == "azurelinux" ]]; then
+                    REGISTRIES+=";$(INTERNAL_ACR_REGISTRY):$(version)-mariner"
+                  fi
+                  echo "##vso[task.setvariable variable=REGISTRIES]$REGISTRIES"
+                displayName: Set REGISTRIES variable
+
+              - task: AzureCLI@2
+                retryCountOnTaskFailure: 2
+                inputs:
+                  azureSubscription: "JEG-Infrastructure"
+                  scriptType: "bash"
+                  scriptLocation: "scriptPath"
+                  scriptPath: $(Build.SourcesDirectory)/scripts/build-image.sh
+                  ${{ if eq(parameters.dryrun, true) }}:
+                    arguments: >
+                      --image             $(image)
+                      --tag               $(tag)
+                      --package           $(package)
+                      --distribution      $(distro)
+                      --registries        $(REGISTRIES)
+                      --installer-image   $(installer_image)
+                      --installer-tag     $(installer_tag)
+                      --base-image        $(base_image)
+                      --base-tag          $(base_tag)
+                      --dryrun
+                  ${{ else }}:
+                    arguments: >
+                      --image             $(image)
+                      --tag               $(tag)
+                      --package           $(package)
+                      --distribution      $(distro)
+                      --registries        $(REGISTRIES)
+                      --installer-image   $(installer_image)
+                      --installer-tag     $(installer_tag)
+                      --base-image        $(base_image)
+                      --base-tag          $(base_tag)
+                displayName: build container image
+
+              - template: /.devops/templates/annotate-image.yml@self
+                parameters:
+                  registry: $(INTERNAL_ACR_REGISTRY)
+                  organization: ${{ parameters.organization }}
+                  feed: ${{ parameters.feed }}
+                  package: ${{ parameters.az_package }}
+                  dryrun: ${{ parameters.dryrun }}
 
 
-  - job: wait_for_validation
-    dependsOn: build_internal
-    displayName: wait for validation
-    pool: server
-    steps:
-      - task: ManualValidation@0
-        # 3 days
-        timeoutInMinutes: 4320
-        inputs:
-          instructions: "please validate the build configuration, artifacts, tests, and resume"
-          onTimeout: "resume"
+      - stage: validate_and_publish
+        displayName: "Validate & Publish"
+        dependsOn: build_internal
+        jobs:
 
-  - job: build_public
-    displayName: "build public "
-    dependsOn: wait_for_validation
-    pool:
-      vmImage: ubuntu-20.04
-    strategy:
-      matrix: ${{ parameters.jobs }}
-    steps:
-      - task: Docker@2
-        displayName: build regular image
-        condition: and(succeeded(), ne(variables.distro, 'distroless'))
-        inputs:
-          command: build
-          repository: public/openjdk/jdk
-          dockerfile: docker/$(distro)/Dockerfile.$(package)-jdk
-          containerRegistry: "Java Engineering ACR"
-          arguments: --build-arg IMAGE=$(image) --build-arg TAG=$(tag) --build-arg package=$(package)
-          tags: |
-            $(version)-$(distro)
-      - task: Docker@2
-        displayName: build distroless image
-        condition: and(succeeded(), eq(variables.distro, 'distroless'))
-        inputs:
-          command: build
-          repository: public/openjdk/jdk
-          dockerfile: docker/$(distro)/Dockerfile.$(package)-jdk
-          containerRegistry: "Java Engineering ACR"
-          arguments: --build-arg INSTALLER_IMAGE=$(installer_image) --build-arg INSTALLER_TAG=$(installer_tag) --build-arg BASE_IMAGE=$(base_image) --build-arg BASE_TAG=$(base_tag) --build-arg package=$(package)
-          tags: |
-            $(version)-$(distro)
-      - task: Docker@2
-        displayName: push image to container registry
-        inputs:
-          command: push
-          repository: public/openjdk/jdk
-          containerRegistry: "Java Engineering ACR"
-          tags: |
-            $(version)-$(distro)
+          - job: wait_for_validation
+            displayName: wait for validation
+            pool: server
+            steps:
+              - task: ManualValidation@0
+                timeoutInMinutes: 4320 # Three days
+                inputs:
+                  instructions: "please validate the build configuration, artifacts, tests, and resume"
+                  onTimeout: "resume"
+
+          - job: build_public
+            dependsOn: wait_for_validation
+            pool:
+              name: JEG-azurelinux-x64-release
+              os: linux
+            strategy:
+              matrix: ${{ parameters.jobs }}
+            variables:
+              ACR_NAME: msopenjdk
+            steps:
+              - template: /.devops/templates/prepare-annotation.yml@self
+                parameters:
+                  registry: $(ACR_REGISTRY)
+                  tag: $(version)-$(distro)
+
+              - bash: |
+                  REGISTRIES=$(ACR_REGISTRY):$(version)-$(distro)
+                  if [[ "$(distro)" == "azurelinux" ]]; then
+                    REGISTRIES+=";$(ACR_REGISTRY):$(version)-mariner"
+                  fi
+                  echo "##vso[task.setvariable variable=REGISTRIES]$REGISTRIES"
+                displayName: Set REGISTRIES variable
+
+              - task: AzureCLI@2
+                retryCountOnTaskFailure: 2
+                inputs:
+                  azureSubscription: "JEG-Infrastructure"
+                  scriptType: "bash"
+                  scriptLocation: "scriptPath"
+                  scriptPath: $(Build.SourcesDirectory)/scripts/build-image.sh
+                  ${{ if eq(parameters.dryrun, true) }}:
+                    arguments: >
+                      --image             $(image)
+                      --tag               $(tag)
+                      --package           $(package)
+                      --distribution      $(distro)
+                      --registries        $(REGISTRIES)
+                      --installer-image   $(installer_image)
+                      --installer-tag     $(installer_tag)
+                      --base-image        $(base_image)
+                      --base-tag          $(base_tag)
+                      --dryrun
+                  ${{ else }}:
+                    arguments: >
+                      --image             $(image)
+                      --tag               $(tag)
+                      --package           $(package)
+                      --distribution      $(distro)
+                      --registries        $(REGISTRIES)
+                      --installer-image   $(installer_image)
+                      --installer-tag     $(installer_tag)
+                      --base-image        $(base_image)
+                      --base-tag          $(base_tag)
+                displayName: build container image
+
+              - template: /.devops/templates/annotate-image.yml@self
+                parameters:
+                  registry: $(ACR_REGISTRY)
+                  organization: ${{ parameters.organization }}
+                  feed: ${{ parameters.feed }}
+                  package: ${{ parameters.az_package }}
+                  dryrun: ${{ parameters.dryrun }}
+
+              - task: PythonScript@0
+                displayName: Set build tag
+                condition: ne(${{ parameters.dryrun }}, true) # images are not built when running in dryrun mode.
+                inputs:
+                  scriptSource: 'inline'
+                  script: |
+                    # 15 is used since that will include sha prefix + eight digits of the hash value
+                    tag = "$(containerImageDigest)"[:15]
+                    tag = tag.replace(":", "_")
+
+                    print(f"##vso[build.addbuildtag]{tag}")
+
+              - ${{ if ne(parameters.dryrun, true) }}:
+                - task: AzureCLI@2
+                  displayName: Trigger signing
+                  env:
+                    AZURE_DEVOPS_EXT_PAT: $(System.AccessToken)
+                  inputs:
+                    azureSubscription: "JEG-Infrastructure"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      az pipelines run \
+                        --branch main \
+                        --org ${{ parameters.organization }} \
+                        --project $(OPENJDK_PROJECT) \
+                        --id $(OPENJDK_SIGNING_ID) \
+                        --parameters image_repository="$(ACR_REGISTRY)" \
+                          reference="$(containerImageDigest)" \
+                          reference_type="container_digest"

@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Set expected JDK versions after the images are built
-declare -A jdkversions=( ["11"]="11.0.15" ["17"]="17.0.3" ["8"]="1.8.0_332" )
+declare -a jdkversions=( ["11"]="11.0.20.1" ["17"]="17.0.8.1" ["21"]="21" ["8"]="1.8.0_382" )
 
 # Set the base MCR repo
 basemcr="mcr.microsoft.com/openjdk/jdk"
 
 # Get current directory
-basepath="$(dirname "$0")/docker"
+basepath=$(dirname "$(dirname "$0")")/docker/
 
 # Build all distros and versions of OpenJDK
 for d in $(ls -d $basepath/*); do
@@ -56,5 +56,8 @@ for d in $(ls -d $basepath/*); do
             echo "ERROR: Image '${image}' contains unexpected JDK version: ${java_version}"
             echo "  Expected: ${expectedversion}"
         fi
+
+        # Run tests
+        bash ./scripts/test-image.sh $distro $jdkversion
     done
 done

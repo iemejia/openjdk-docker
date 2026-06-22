@@ -3,34 +3,75 @@ name: Validate Published Images
 on:
   workflow_dispatch:
 
-jobs:
+permissions:
+  contents: read
 
+jobs:
   validate_temurin:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        distros: [ "mariner", "distroless" ]
-        jdkvendor: [ "temurin" ]
-        jdkversion: [ { major: "8", expected: "1.8.0_345" } ]
+        distros: ["azurelinux", "distroless"]
+        jdkvendor: ["temurin"]
+        jdkversion: [{ major: "8", expected: "1.8.0_472" }]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Validate container images
         run: |
-          ./validate-image.sh ${{ matrix.distros }} ${{ matrix.jdkvendor }} ${{ matrix.jdkversion.major }} ${{ matrix.jdkversion.expected }}
+          ./scripts/validate-image.sh \
+            ${{ matrix.distros }} \
+            ${{ matrix.jdkvendor }} \
+            ${{ matrix.jdkversion.major }} \
+            ${{ matrix.jdkversion.expected }}
 
   validate_msopenjdk:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        distros: [ "mariner", "distroless", "mariner-cm1", "ubuntu" ]
-        jdkvendor: [ "msopenjdk" ]
-        jdkversion: [ { major: "11", expected: "11.0.16.1" }, { major: "17", expected: "17.0.4.1" } ]
+        distros: ["azurelinux", "distroless", "ubuntu"]
+        jdkvendor: ["msopenjdk"]
+        jdkversion:
+          [
+            { major: "11", expected: "11.0.31" },
+            { major: "17", expected: "17.0.19" },
+            { major: "21", expected: "21.0.11" },
+            { major: "25", expected: "25.0.3" }
+          ]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Validate container images
         run: |
-          ./validate-image.sh ${{ matrix.distros }} ${{ matrix.jdkvendor }} ${{ matrix.jdkversion.major }} ${{ matrix.jdkversion.expected }}
+          ./scripts/validate-image.sh \
+            ${{ matrix.distros }} \
+            ${{ matrix.jdkvendor }} \
+            ${{ matrix.jdkversion.major }} \
+            ${{ matrix.jdkversion.expected }}
+
+  validate_msopenjdk_aarch64:
+    runs-on: ["self-hosted", "1ES.Pool=JEG-linux-arm64-openjdk-docker"]
+    strategy:
+      fail-fast: false
+      matrix:
+        distros: ["azurelinux", "distroless", "ubuntu"]
+        jdkvendor: ["msopenjdk"]
+        jdkversion:
+          [
+            { major: "11", expected: "11.0.31" },
+            { major: "17", expected: "17.0.19" },
+            { major: "21", expected: "21.0.11" },
+            { major: "25", expected: "25.0.3" }
+          ]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Validate container images
+        run: |
+          ./scripts/validate-image.sh \
+            ${{ matrix.distros }} \
+            ${{ matrix.jdkvendor }} \
+            ${{ matrix.jdkversion.major }} \
+            ${{ matrix.jdkversion.expected }}
